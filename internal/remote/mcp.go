@@ -122,7 +122,7 @@ func (s Server) Handler() http.Handler {
 			if v != "2025-03-26" && v != "2025-06-18" && v != "2025-11-25" {
 				v = "2025-11-25"
 			}
-			send(w, resp(req.ID, map[string]any{"protocolVersion": v, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "chatgpt-remote", "version": "0.1.0"}, "instructions": "Operate only within explicitly configured roots; confirm writes and terminal operations."}))
+			send(w, resp(req.ID, map[string]any{"protocolVersion": v, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "chatgpt-remote", "version": "0.3.2"}, "instructions": "Operate only within explicitly configured roots; confirm writes and terminal operations."}))
 		case "ping":
 			send(w, resp(req.ID, map[string]any{}))
 		case "tools/list":
@@ -185,7 +185,7 @@ func (s Server) call(r *http.Request, name string, raw json.RawMessage) (any, er
 	case "run_command":
 		return RunCommand(r.Context(), s.Config, a.Directory, a.Program, a.Args, a.Timeout)
 	case "get_status":
-		return map[string]any{"version": "0.1.0", "roots": s.Config.Roots, "commands_enabled": s.Config.EnableCommands, "allowed_commands": s.Config.AllowedCommands}, nil
+		return map[string]any{"version": "0.3.2", "roots": s.Config.Roots, "commands_enabled": s.Config.EnableCommands, "allowed_commands": s.Config.AllowedCommands}, nil
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -226,7 +227,9 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b.Pending[nonce] = &pendingAuth{ClientID: clientID, Redirect: red, State: q.Get("state"), Challenge: q.Get("code_challenge"), Resource: resource, Scope: "mcp:tools", Created: now}
+		pendingCount := len(b.Pending)
 		b.mu.Unlock()
+		log.Printf("oauth: pairing page issued (active_requests=%d)", pendingCount)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		_ = pairingPage.Execute(w, struct{ Nonce string }{nonce})
@@ -245,6 +248,11 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()
 	entry, ok := b.Pending[nonce]
 	if !ok || time.Since(entry.Created) > pairingRequestTTL {
+		if !ok {
+			log.Printf("oauth: pairing rejected: request not found (active_requests=%d); likely stale browser tab or restarted tunnel", len(b.Pending))
+		} else {
+			log.Printf("oauth: pairing rejected: request older than %v", pairingRequestTTL)
+		}
 		delete(b.Pending, nonce)
 		b.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -262,6 +270,7 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	// Use constant-time equality and consume the request on successful approval.
 	if len(provided) != len(b.PairCode) || subtle.ConstantTimeCompare([]byte(provided), []byte(b.PairCode)) != 1 {
 		b.mu.Unlock()
+		log.Printf("oauth: pairing rejected: incorrect code")
 		http.Error(w, "Wrong pairing code. Go back and try again.", 403)
 		return
 	}
@@ -269,6 +278,7 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	b.Codes[code] = &authCode{Auth: *entry, Expires: time.Now().Add(60 * time.Second)}
 	delete(b.Pending, nonce)
 	b.mu.Unlock()
+	log.Printf("oauth: pairing approved; redirecting to ChatGPT")
 	dest, _ := url.Parse(entry.Redirect)
 	query := dest.Query()
 	query.Set("code", code)
@@ -281,7 +291,7 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 // Browsers previously showed only {"error":"expired_request"}, leaving no
 // indication of how to recover. An OAuth request is never silently recreated:
 // the user must explicitly restart authorization from ChatGPT.
-const expiredPairingPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ChatGPT Remote — Session expired</title><style>body{font:16px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;color:#171717}p{color:#555;line-height:1.5}</style><h2>Pairing session expired</h2><p>The authorization session expired or is no longer available (expired_request). Return to ChatGPT and start the connection approval again to open a fresh pairing page.</p><p>Keep the chatgpt-remote terminal running. If you restarted it, the Cloudflare URL changed and you must update the MCP connection URL in ChatGPT.</p></html>`
+const expiredPairingPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ChatGPT Remote — Session expired</title><style>body{font:16px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;color:#171717}p{color:#555;line-height:1.5}</style><h2>Pairing session expired</h2><p>The authorization session could not be found in the current tunnel or has expired (expired_request). Close this old page and return to ChatGPT. Remove the old connection, use the URL currently shown in your terminal, and start a fresh authorization. Do not reuse this tab.</p><p>Keep the original chatgpt-remote terminal running. Inspect its OAuth diagnostic lines to see whether a new pairing page was issued. If you restarted it, the Cloudflare URL changed and you must update the MCP connection URL in ChatGPT.</p></html>`
 
 var pairingPage = template.Must(template.New("authorize").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ChatGPT Remote — Authorize</title><style>body{font:16px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;color:#171717}input,button{box-sizing:border-box;width:100%;padding:13px;margin-top:13px;font:inherit;border-radius:8px}input{border:1px solid #aaa}button{border:0;background:#202020;color:white;cursor:pointer}p{color:#555;line-height:1.5}</style><h2>Connect ChatGPT Remote</h2><p>Only continue if you started this connection. Enter the pairing code shown in your Linux terminal to allow ChatGPT to access your permitted project files.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="nonce" value="{{.Nonce}}"><input type="text" name="code" autocomplete="off" spellcheck="false" placeholder="Pairing code" required autofocus><button type="submit">Authorize connection</button></form><p>Do not share this code with others.</p></html>`))
 
@@ -456,6 +466,7 @@ func RunQuickTunnel() error {
 		}
 		ended <- errors.New("Cloudflare tunnel ended before a URL was received")
 	}()
+	fmt.Printf("ChatGPT Remote v0.3.2 (process %d)\n", os.Getpid())
 	fmt.Println("Starting Cloudflare secure MCP connection...")
 	select {
 	case endpoint := <-urls:

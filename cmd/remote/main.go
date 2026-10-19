@@ -15,7 +15,7 @@ import (
 )
 
 func usage() {
-	fmt.Println(`chatgpt-remote
+	fmt.Println(`chatgpt-remote v0.3.2
 
 Run without arguments to open a secure, temporary Cloudflare MCP tunnel.
 
@@ -41,6 +41,8 @@ func main() {
 		return
 	}
 	switch os.Args[1] {
+	case "version":
+		fmt.Println("chatgpt-remote v0.3.2")
 	case "setup":
 		fs := flag.NewFlagSet("setup", flag.ExitOnError)
 		root := fs.String("root", "", "Existing project directory to share")

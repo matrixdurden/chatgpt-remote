@@ -148,7 +148,7 @@ func TestBridgeExpiredPairingHasRecoveryInstructions(t *testing.T) {
 			b.mu.Unlock()
 		}
 		res := requestBridge(b, "POST", "https://example.trycloudflare.com/oauth/authorize", url.Values{"nonce": {nonce}, "code": {"0123456789abcdef12345678"}}.Encode(), "application/x-www-form-urlencoded", "")
-		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "expired_request") || !strings.Contains(res.Body.String(), "Return to ChatGPT") {
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "expired_request") || !strings.Contains(res.Body.String(), "return to ChatGPT") {
 			t.Fatalf("unexpected expired approval result: %d %s", res.Code, res.Body.String())
 		}
 	}
