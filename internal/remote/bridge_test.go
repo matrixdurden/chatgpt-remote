@@ -153,3 +153,63 @@ func TestBridgeExpiredPairingHasRecoveryInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestPairingTicketSurvivesPendingEvictionAndRestart(t *testing.T) {
+	orig := NewBridge("http://127.0.0.1:8765/mcp", "stable-private-token", "my-pairing-code")
+	orig.Activate("https://example.trycloudflare.com")
+	entry := pendingAuth{ClientID: "client1", Redirect: "https://chatgpt.com/connector_platform_oauth_redirect", State: "state", Challenge: "abcdef", Resource: orig.resource(), Scope: "mcp:tools", Created: time.Now()}
+	ticket, err := orig.sealPairing(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another bridge process, but the same local secret and public hostname.
+	fresh := NewBridge("http://127.0.0.1:8765/mcp", "stable-private-token", "my-pairing-code")
+	fresh.Activate("https://example.trycloudflare.com")
+	form := url.Values{"nonce": {ticket}, "code": {"my-pairing-code"}}
+	r := requestBridge(fresh, "POST", "https://example.trycloudflare.com/oauth/authorize", form.Encode(), "application/x-www-form-urlencoded", "")
+	if r.Code != http.StatusSeeOther {
+		t.Fatalf("fresh process should restore signed ticket: %d %s", r.Code, r.Body.String())
+	}
+	// Same approval is never accepted twice.
+	repeated := requestBridge(fresh, "POST", "https://example.trycloudflare.com/oauth/authorize", form.Encode(), "application/x-www-form-urlencoded", "")
+	if repeated.Code != http.StatusBadRequest {
+		t.Fatalf("reused ticket must fail: %d", repeated.Code)
+	}
+}
+
+func TestPairingTicketRejectsTamperingWrongOriginAndExpiry(t *testing.T) {
+	bridge := NewBridge("http://127.0.0.1:8765/mcp", "stable-private-token", "pairing")
+	bridge.Activate("https://test.trycloudflare.com")
+	entry := pendingAuth{ClientID: "client1", Redirect: "https://chatgpt.com/connector_platform_oauth_redirect", State: "state", Challenge: "abcdef", Resource: bridge.resource(), Scope: "mcp:tools", Created: time.Now()}
+	ticket, err := bridge.sealPairing(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := []byte(ticket)
+	if flipped[len(flipped)-1] == '0' {
+		flipped[len(flipped)-1] = '1'
+	} else {
+		flipped[len(flipped)-1] = '0'
+	}
+	if _, err = bridge.unsealPairing(string(flipped)); err == nil {
+		t.Fatal("tampered ticket accepted")
+	}
+	other := NewBridge("http://127.0.0.1:8765/mcp", "stable-private-token", "pairing")
+	other.Activate("https://other.trycloudflare.com")
+	if _, err = other.unsealPairing(ticket); err == nil {
+		t.Fatal("ticket valid on other origin")
+	}
+	otherToken := NewBridge("http://127.0.0.1:8765/mcp", "different-private-token", "pairing")
+	otherToken.Activate("https://test.trycloudflare.com")
+	if _, err = otherToken.unsealPairing(ticket); err == nil {
+		t.Fatal("ticket valid with wrong token")
+	}
+	entry.Created = time.Now().Add(-31 * time.Minute)
+	oldTicket, err := bridge.sealPairing(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bridge.unsealPairing(oldTicket); err == nil {
+		t.Fatal("expired ticket accepted")
+	}
+}

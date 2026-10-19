@@ -35,11 +35,11 @@ jobs:
           done
           cd out
           sha256sum *.tar.gz > SHA256SUMS
-      - name: Publish v0.3.2 release
+      - name: Publish v0.3.3 release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.2
-          name: ChatGPT Remote v0.3.2
+          tag_name: v0.3.3
+          name: ChatGPT Remote v0.3.3
           make_latest: true
           files: |
             out/*.tar.gz

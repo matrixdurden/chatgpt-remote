@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -41,12 +43,14 @@ type Bridge struct {
 	PairCode   string
 	Clients    map[string][]string
 	Pending    map[string]*pendingAuth
+	Redeemed   map[string]time.Time
 	Codes      map[string]*authCode
 	Tokens     map[string]*issuedToken
 	Refresh    map[string]*issuedToken
 	Client     *http.Client
 	ready      chan struct{}
 }
+
 const pairingRequestTTL = 30 * time.Minute
 
 type pendingAuth struct {
@@ -71,7 +75,7 @@ func randomHex(bytesCount int) string {
 	return hex.EncodeToString(b)
 }
 func NewBridge(localURL, token, pairCode string) *Bridge {
-	return &Bridge{LocalURL: localURL, LocalToken: token, PairCode: pairCode, Clients: map[string][]string{}, Pending: map[string]*pendingAuth{}, Codes: map[string]*authCode{}, Tokens: map[string]*issuedToken{}, Refresh: map[string]*issuedToken{}, Client: &http.Client{Timeout: 42 * time.Second}, ready: make(chan struct{})}
+	return &Bridge{LocalURL: localURL, LocalToken: token, PairCode: pairCode, Clients: map[string][]string{}, Pending: map[string]*pendingAuth{}, Redeemed: map[string]time.Time{}, Codes: map[string]*authCode{}, Tokens: map[string]*issuedToken{}, Refresh: map[string]*issuedToken{}, Client: &http.Client{Timeout: 42 * time.Second}, ready: make(chan struct{})}
 }
 func (b *Bridge) Activate(publicBase string) {
 	b.mu.Lock()
@@ -80,6 +84,74 @@ func (b *Bridge) Activate(publicBase string) {
 	close(b.ready)
 }
 func (b *Bridge) resource() string { return b.Base + "/mcp" }
+
+// A sealed browser ticket prevents a legitimate form from failing only because
+// the original in-memory pending request was evicted or lost. Its encryption
+// key is derived from the private local daemon token; it is never sent to the
+// browser. The public origin is authenticated as AES-GCM additional data.
+// Short non-secret correlation ID for comparing the authorize GET and form POST.
+func pairingLogID(ticket string) string {
+	sum := sha256.Sum256([]byte(ticket))
+	return hex.EncodeToString(sum[:4])
+}
+func (b *Bridge) sealPairing(entry pendingAuth) (string, error) {
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return "", err
+	}
+	key := sha256.Sum256([]byte("chatgpt-remote/pairing/v1:" + b.LocalToken))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return "", err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err = rand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := aead.Seal(nonce, nonce, raw, []byte(b.Base))
+	return hex.EncodeToString(sealed), nil
+}
+func (b *Bridge) unsealPairing(ticket string) (*pendingAuth, error) {
+	if len(ticket) < 60 || len(ticket) > 4096 {
+		return nil, errors.New("invalid pairing ticket")
+	}
+	sealed, err := hex.DecodeString(ticket)
+	if err != nil {
+		return nil, errors.New("invalid pairing ticket")
+	}
+	key := sha256.Sum256([]byte("chatgpt-remote/pairing/v1:" + b.LocalToken))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < aead.NonceSize()+aead.Overhead() {
+		return nil, errors.New("invalid pairing ticket")
+	}
+	raw, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], []byte(b.Base))
+	if err != nil {
+		return nil, errors.New("invalid pairing ticket")
+	}
+	var entry pendingAuth
+	if err = json.Unmarshal(raw, &entry); err != nil {
+		return nil, errors.New("invalid pairing ticket")
+	}
+	if entry.Created.IsZero() || entry.Created.After(time.Now().Add(time.Minute)) ||
+		time.Since(entry.Created) > pairingRequestTTL ||
+		entry.Resource != b.resource() || entry.Scope != "mcp:tools" ||
+		!validRedirect(entry.Redirect) || entry.ClientID == "" ||
+		entry.Challenge == "" || entry.State == "" {
+		return nil, errors.New("expired or invalid pairing ticket")
+	}
+	return &entry, nil
+}
 func respondJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -211,7 +283,12 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 		if resource == "" {
 			resource = b.resource()
 		}
-		nonce := randomHex(24)
+		entry := pendingAuth{ClientID: clientID, Redirect: red, State: q.Get("state"), Challenge: q.Get("code_challenge"), Resource: resource, Scope: "mcp:tools", Created: time.Now()}
+		nonce, sealErr := b.sealPairing(entry)
+		if sealErr != nil {
+			http.Error(w, "authorization unavailable", http.StatusInternalServerError)
+			return
+		}
 		b.mu.Lock()
 		// Keep the pending set bounded. OAuth registration can trigger multiple
 		// browser tabs and stale authorizations; expire old sessions on each GET.
@@ -226,10 +303,10 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, http.StatusTooManyRequests, "slow_down")
 			return
 		}
-		b.Pending[nonce] = &pendingAuth{ClientID: clientID, Redirect: red, State: q.Get("state"), Challenge: q.Get("code_challenge"), Resource: resource, Scope: "mcp:tools", Created: now}
+		b.Pending[nonce] = &entry
 		pendingCount := len(b.Pending)
 		b.mu.Unlock()
-		log.Printf("oauth: pairing page issued (active_requests=%d)", pendingCount)
+		log.Printf("oauth: pairing page issued (request=%s active_requests=%d)", pairingLogID(nonce), pendingCount)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		_ = pairingPage.Execute(w, struct{ Nonce string }{nonce})
@@ -245,14 +322,22 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nonce, provided := r.Form.Get("nonce"), r.Form.Get("code")
+	log.Printf("oauth: pairing form received (request=%s ticket_bytes=%d)", pairingLogID(nonce), len(nonce))
 	b.mu.Lock()
 	entry, ok := b.Pending[nonce]
-	if !ok || time.Since(entry.Created) > pairingRequestTTL {
-		if !ok {
-			log.Printf("oauth: pairing rejected: request not found (active_requests=%d); likely stale browser tab or restarted tunnel", len(b.Pending))
-		} else {
-			log.Printf("oauth: pairing rejected: request older than %v", pairingRequestTTL)
+	_, used := b.Redeemed[nonce]
+	if !ok && !used {
+		// Recover a valid browser session even after a pending map eviction.
+		// The server token and public hostname authenticate its contents.
+		if restored, err := b.unsealPairing(nonce); err == nil && len(b.Pending) < 128 {
+			entry = restored
+			b.Pending[nonce] = entry
+			ok = true
+			log.Printf("oauth: pairing restored from secure browser ticket")
 		}
+	}
+	if !ok || used || time.Since(entry.Created) > pairingRequestTTL {
+		log.Printf("oauth: pairing rejected: invalid, consumed or expired request")
 		delete(b.Pending, nonce)
 		b.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -277,6 +362,13 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	code := randomHex(32)
 	b.Codes[code] = &authCode{Auth: *entry, Expires: time.Now().Add(60 * time.Second)}
 	delete(b.Pending, nonce)
+	b.Redeemed[nonce] = time.Now()
+	// Keep one-time-use markers bounded; full session tickets still expire.
+	for key, usedAt := range b.Redeemed {
+		if time.Since(usedAt) > pairingRequestTTL {
+			delete(b.Redeemed, key)
+		}
+	}
 	b.mu.Unlock()
 	log.Printf("oauth: pairing approved; redirecting to ChatGPT")
 	dest, _ := url.Parse(entry.Redirect)
