@@ -51,6 +51,7 @@ CONFIG="$("$BIN" config-path)"
 if [[ ! -f "$CONFIG" ]]; then "$BIN" setup --root "$ROOT"
 else echo "Keeping settings: $CONFIG"; fi
 if [[ "$NO_START" -eq 0 ]]; then
+  USING_SYSTEMD=0
   if [[ "${CHATGPT_REMOTE_NO_SYSTEMD:-0}" != "1" ]] && command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
     mkdir -p "$UNIT_DIR"
     cat > "$UNIT_DIR/chatgpt-remote.service" <<'UNIT'
@@ -72,6 +73,7 @@ WantedBy=default.target
 UNIT
     systemctl --user daemon-reload
     systemctl --user enable --now chatgpt-remote.service
+    USING_SYSTEMD=1
     echo 'Started using systemd --user.'
   else
     nohup "$BIN" serve > "$STATE_DIR/server.log" 2>&1 < /dev/null &
@@ -80,7 +82,34 @@ UNIT
     kill -0 "$!" 2>/dev/null || { echo 'Server failed; check ~/.local/state/chatgpt-remote/server.log' >&2; exit 1; }
     echo 'Started in background (no systemd).'
   fi
-  "$BIN" doctor
+  # systemd Type=simple may report success before the MCP port is listening.
+  # Wait for a successful authenticated handshake instead of racing startup.
+  READY=0
+  LAST_ERROR=''
+  for ((ATTEMPT=1; ATTEMPT<=40; ATTEMPT++)); do
+    if OUTPUT="$("$BIN" doctor 2>&1)"; then
+      printf '%s\n' "$OUTPUT"
+      READY=1
+      break
+    fi
+    LAST_ERROR="$OUTPUT"
+    if [[ "$USING_SYSTEMD" -eq 0 && -f "$STATE_DIR/server.pid" ]]; then
+      PID="$(cat "$STATE_DIR/server.pid")"
+      if ! kill -0 "$PID" 2>/dev/null; then break; fi
+    fi
+    sleep 0.25
+  done
+  if [[ "$READY" -ne 1 ]]; then
+    echo 'ERROR: MCP did not become ready within the startup window.' >&2
+    printf '%s\n' "$LAST_ERROR" >&2
+    if [[ "$USING_SYSTEMD" -eq 1 ]]; then
+      systemctl --user status chatgpt-remote.service --no-pager -l >&2 || true
+      journalctl --user -u chatgpt-remote.service -n 25 --no-pager >&2 || true
+    elif [[ -f "$STATE_DIR/server.log" ]]; then
+      tail -n 25 "$STATE_DIR/server.log" >&2 || true
+    fi
+    exit 1
+  fi
 fi
 printf '\nInstalled on Linux%s\n' "$(grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null && printf ' (WSL)' || true)"
 printf 'Shared directory: %s\n' "$ROOT"
