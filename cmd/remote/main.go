@@ -15,7 +15,11 @@ import (
 )
 
 func usage() {
-	fmt.Println(`chatgpt-remote v0.1.0
+	fmt.Println(`chatgpt-remote
+
+Run without arguments to open a secure, temporary Cloudflare MCP tunnel.
+
+Advanced commands:
 
 Commands:
   setup --root /absolute/project/path
@@ -31,7 +35,9 @@ listener to the Internet. ChatGPT custom MCP access depends on your plan.`)
 func die(e error) { fmt.Fprintln(os.Stderr, "error:", e); os.Exit(1) }
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		if err := remote.RunQuickTunnel(); err != nil {
+			die(err)
+		}
 		return
 	}
 	switch os.Args[1] {

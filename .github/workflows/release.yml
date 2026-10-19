@@ -31,11 +31,12 @@ jobs:
           done
           cd out
           sha256sum *.tar.gz > SHA256SUMS
-      - name: Publish first installable release (or version tag)
+      - name: Publish v0.3.0 release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.2.0' }}
-          target_commitish: ${{ github.sha }}
+          tag_name: v0.3.0
+          name: ChatGPT Remote v0.3.0
+          make_latest: true
           files: |
             out/*.tar.gz
             out/SHA256SUMS
