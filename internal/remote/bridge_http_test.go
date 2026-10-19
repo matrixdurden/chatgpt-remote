@@ -21,7 +21,7 @@ func TestOAuthRealHTTPRoundTrip(t *testing.T) {
   backend:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
     if r.URL.Path!="/mcp" || r.Header.Get("Authorization")!="Bearer local-secret" {http.Error(w,"unauthorized",401);return}
     w.Header().Set("Content-Type","application/json")
-    _,_=io.WriteString(w, "{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"result\\":{\\"tools\\":[{\\"name\\":\\"get_status\\"}]}}")
+    _,_=io.WriteString(w, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"get_status\"}]}}")
   }))
   defer backend.Close()
   b:=NewBridge(backend.URL+"/mcp","local-secret","pairing-123")
@@ -43,7 +43,7 @@ func TestOAuthRealHTTPRoundTrip(t *testing.T) {
     status,_,_:=call("GET",path,"","","");if status!=200{t.Fatalf("discovery: %d",status)}
   }
   callback:="https://chatgpt.com/connector_platform_oauth_redirect"
-  status,body,_:=call("POST","/oauth/register",fmt.Sprintf("{\\"redirect_uris\\":[%q],\\"token_endpoint_auth_method\\":\\"none\\"}",callback),"application/json","")
+  status,body,_:=call("POST","/oauth/register",fmt.Sprintf("{\"redirect_uris\":[%q],\"token_endpoint_auth_method\":\"none\"}",callback),"application/json","")
   if status!=201{t.Fatalf("registration: %d %s",status,body)}
   var reg struct{ClientID string `json:"client_id"`}
   if e:=json.Unmarshal([]byte(body),&reg);e!=nil{t.Fatal(e)}
@@ -53,7 +53,7 @@ func TestOAuthRealHTTPRoundTrip(t *testing.T) {
   query:=url.Values{"response_type":{"code"},"client_id":{reg.ClientID},"redirect_uri":{callback},"state":{"state-123"},"code_challenge":{challenge},"code_challenge_method":{"S256"},"resource":{base+"/mcp"}}
   status,body,_=call("GET","/oauth/authorize?"+query.Encode(),"","","")
   if status!=200{t.Fatalf("authorize: %d %s",status,body)}
-  match:=regexp.MustCompile("name=\\"nonce\\" value=\\"([a-f0-9]+)\\"").FindStringSubmatch(body)
+  match:=regexp.MustCompile("name=\"nonce\" value=\"([a-f0-9]+)\"").FindStringSubmatch(body)
   if len(match)!=2{t.Fatal("nonce missing")}
   form:=url.Values{"nonce":{match[1]},"code":{"pairing-123"}}
   status,_,h:=call("POST","/oauth/authorize",form.Encode(),"application/x-www-form-urlencoded","")
@@ -66,7 +66,7 @@ func TestOAuthRealHTTPRoundTrip(t *testing.T) {
   var tok struct{Access string `json:"access_token"`}
   if e:=json.Unmarshal([]byte(body),&tok);e!=nil{t.Fatal(e)}
   if tok.Access==""{t.Fatal("missing token")}
-  status,body,_=call("POST","/mcp","{\\"jsonrpc\\":\\"2.0\\",\\"id\\":1,\\"method\\":\\"tools/list\\"}","application/json",tok.Access)
+  status,body,_=call("POST","/mcp","{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}","application/json",tok.Access)
   if status!=200 || !strings.Contains(body,"get_status"){t.Fatalf("MCP: %d %s",status,body)}
   status,body,_=call("POST","/oauth/authorize",form.Encode(),"application/x-www-form-urlencoded","")
   if status!=400 || !strings.Contains(body,"Close this old page"){t.Fatalf("stale form: %d %s",status,body)}
