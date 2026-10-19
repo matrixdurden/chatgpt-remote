@@ -1,0 +1,8 @@
+/bin/
+*.exe
+*.log
+.env
+*.key
+config.json
+token
+.DS_Store
