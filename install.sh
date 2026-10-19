@@ -63,6 +63,13 @@ if [[ -z "$STAGING" ]]; then
   mkdir -p "$STAGING/bin" "$TEMP/gocache"
   (cd "$STAGING" && GOTOOLCHAIN=local GOCACHE="$TEMP/gocache" GOPATH="$TEMP/gopath" "$GO_BIN" build -trimpath -o bin/chatgpt-remote ./cmd/remote)
 fi
+# Load current installer scripts even when the prebuilt binary is from an
+# older GitHub release, so startup fixes work without building from source.
+if [[ "$STAGING" == "$TEMP/chatgpt-remote-linux-$ARCH" ]]; then
+  mkdir -p "$STAGING/scripts"
+  curl -fLsS "https://raw.githubusercontent.com/$REPO/main/scripts/install.sh" -o "$STAGING/scripts/install.sh"
+  curl -fLsS "https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh" -o "$STAGING/scripts/uninstall.sh"
+fi
 ARGS=(--root "$ROOT")
 [[ "$NO_START" -eq 1 ]] && ARGS+=(--no-start)
 CHATGPT_REMOTE_CREATED_WORKSPACE="$CREATED_WORKSPACE" bash "$STAGING/scripts/install.sh" "${ARGS[@]}"
