@@ -1,33 +1,58 @@
-# ChatGPT Remote — Türkçe Hızlı Başlangıç
+# ChatGPT Remote — Türkçe Kurulum Rehberi
 
-**Durum:** v0.1.0; çalışan yerel MCP prototipi. ChatGPT hesabında MCP plugin oluşturma/yazma yetkisi bulunması garanti değildir. Sunucu, kendi makinenizde kurulur; kullanıcının onayı olmadan ChatGPT hesabınıza bağlantı ekleyemez.
+## Destek
 
-## Kurulum (Ubuntu / WSL)
+- ✅ Linux (Ubuntu, Debian ve benzeri): x86-64 / ARM64
+- ✅ Windows 11 üzerinde WSL2 Ubuntu/Debian: aynı Linux kurulumu
+- ❌ PowerShell/CMD üzerinde native Windows: henüz yok
 
-1. Repoyu GitHub'a yükledikten sonra `git clone https://github.com/matrixdurden/chatgpt-remote.git` ile indirin.
-2. `cd chatgpt-remote` klasörüne geçin.
-3. `./scripts/install.sh --root "$HOME/projects"` komutunu çalıştırın. Klasörün önceden bulunması gerekir.
-4. `~/.local/bin/chatgpt-remote serve` komutuyla yerel sunucuyu başlatın.
-5. İkinci terminalde `~/.local/bin/chatgpt-remote doctor` ile MCP protokolünü doğrulayın.
+WSL, Windows dosyalarını /mnt/c üzerinden görebilir. Ancak yalnızca açıkça izin verilen kök dizinlere erişilir. Bu, Windows masaüstü/GUI kontrolü anlamına gelmez.
 
-Kaynak koddan kurulum için Go 1.23+ gerekir. Önceden derlenmiş Linux kurulum paketinde Go kurulması gerekmez. `--service` seçeneği yalnızca systemd kullanıcı servisi desteklenen ortamlarda çalışır.
+## Tek komutla kurulum
+
+WSL Ubuntu veya doğrudan Linux terminalinde:
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/install.sh | bash
+~~~
+
+Kendi proje dizinini paylaşmak için:
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/install.sh | bash -s -- --root "$HOME/projects"
+~~~
+
+Varsayılan olarak ~/projects varsa onu kullanır, yoksa ~/chatgpt-remote-workspace oluşturur. Sudo, git veya Go yüklemeniz gerekmez. GitHub Release varsa doğrulanan hazır binary indirilir; yoksa kaynak kod indirilerek geçici Go araç zinciriyle derlenir. Geçici dosyalar kaldırılır.
+
+Linux systemd --user açıksa servis oradan başlatılır. WSL/systemd yoksa arka planda başlatılır; WSL kapatıldığında süreç durur. Dosya kökleri sınırlıdır; terminal komutları güvenlik için varsayılan olarak devre dışıdır.
+
+## Yerel test
+
+~~~bash
+~/.local/bin/chatgpt-remote doctor
+~/.local/bin/chatgpt-remote status
+~~~
+
+MCP endpoint: http://127.0.0.1:8765/mcp. Yerel test, ChatGPT bağlantısı ve hesap yetkisini doğrulamaz.
+
+## Tek komutla kaldırma (ayar ve token dâhil)
+
+~~~bash
+bash "$HOME/.local/share/chatgpt-remote/uninstall.sh"
+~~~
+
+Alternatif:
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/uninstall.sh | bash
+~~~
+
+Servis, binary, ayarlar, token, PID ve loglar silinir. Kurulumun oluşturduğu özel workspace boşsa silinir; içinde kullanıcı dosyası varsa korunur. Mevcut projeler asla silinmez. Harici MCP tüneli ve ChatGPT plugin bağlantısını ayrıca kaldırmanız gerekir.
 
 ## ChatGPT bağlantısı
 
-1. [ChatGPT Plugins](https://chatgpt.com/plugins) sayfasını açın. `Add custom MCP server` görünmüyorsa plan veya hesap kısıtı olabilir.
-2. Destekleniyorsa OpenAI'nin [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) bileşenini ayrıca yetkilendirip kurun.
-3. Önceden başlattığınız `serve` işlemini durdurun; ardından `chatgpt-remote serve --tunnel-local` ile başlatın. **Bu seçenekte yalnızca yerel 127.0.0.1 adresine gelen istekler için token gerekmiyor. Kendi denetiminizde, erişimi sınırlandırılmış bir tünel dışında kullanmayın.**
-4. Tüneli `http://127.0.0.1:8765/mcp` adresine yönlendirin.
-5. ChatGPT Plugins → `Add custom MCP server` → `Tunnel` ile tüneli seçin; plugin'i yükleyip, ChatGPT'de `@` ile kullanın.
+ChatGPT Plugins sayfasında Add custom MCP server seçeneğini ve hesap izinlerini doğrulayın: https://chatgpt.com/plugins. Tam yetkili özel MCP araçları Plus planlarında garanti değildir. Desteklenen bağlantı üzerinden ayrıca yetkili Secure MCP Tunnel veya OAuth proxy gerekir. Başka kaynaklardan HTTP ile herkese açık, kimlik doğrulamasız erişim vermeyin.
 
-**Dikkat:** Sunucunun 8765 portunu internetten erişilebilir yapmayın. `--tunnel-local` ile herkese açık tünel oluşturmayın. Bağlantının gerçekten çalışıp çalışmadığını ChatGPT hesabınızda test etmek gerekir.
+Resmî kaynak: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
-## Deneme komutları
-
-ChatGPT plugin'i kurulduğunda şu işlemleri isteyin:
-
-- `chatgpt-remote get_status aracını çalıştır.`
-- `İzin verilen projelerimden birinin klasörünü list_files ile göster.`
-- `Test klasöründe deneme.txt oluştur ve sonra read_file ile oku.`
-
-Başlangıçta terminal komutlarını çalıştırma **kapalıdır**. `~/.config/chatgpt-remote/config.json` içindeki `enable_commands` yalnızca riskleri anladıktan sonra etkinleştirilebilir; komutlar sunucunun işletim sistemi kullanıcısının haklarıyla çalışır. Klasör sınırları terminal alt işlemleri için bir güvenlik sandbox'ı değildir.
+Bu proje OpenAI'ın resmî ürünü değildir.

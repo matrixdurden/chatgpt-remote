@@ -15,41 +15,56 @@
 - Source installer for Linux / WSL, optional **systemd --user** service.
 - Go standard library only; no runtime dependency or OpenAI API billing.
 
-## Requirements
+## Platform support
 
-Linux (including WSL2), an existing project folder, and **Go 1.23+ only when building from source**. The precompiled Linux installation bundle includes a binary and does not require Go. Production hardening, signed packaged releases, OAuth and a graphical dashboard are **not yet implemented**. A compiled binary does not need Go installed.
+| System | Supported | Notes |
+|---|---|---|
+| Linux (Ubuntu / Debian, x86-64 or ARM64) | ✅ | Native |
+| Windows 11 with WSL2 Ubuntu/Debian | ✅ | Install INSIDE WSL Linux terminal |
+| Windows PowerShell or CMD without WSL | ❌ | No native Windows executable yet |
 
-## Quick install (Linux/WSL)
+In WSL, Linux files work normally. You can authorize Windows files mounted under /mnt/c by explicitly selecting a root there; this does **not** grant full Windows desktop, GUI or process control. Terminal commands are disabled by default.
 
-```bash
-# Once this repository exists on GitHub:
-git clone https://github.com/matrixdurden/chatgpt-remote.git
-cd chatgpt-remote
-./scripts/install.sh --root "$HOME/projects"
-# Or --root /home/your-user/projects/specific-project
-```
+## One-command installation (Linux and WSL2)
 
-If using the **precompiled Linux archive**, extract it and run the same `./scripts/install.sh --root ...` command; the installer automatically uses the bundled binary. If systemd user services are available, add `--service` during installation. This installs the **authenticated** server automatically; otherwise, launch it manually:
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/install.sh | bash
+~~~
 
-```bash
-~/.local/bin/chatgpt-remote serve
-# In another terminal:
+If you want to share a specific directory instead of the default:
+
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/install.sh | bash -s -- --root "$HOME/projects"
+~~~
+
+The explicit root must exist already. By default, the installer chooses ~/projects when available, otherwise creates ~/chatgpt-remote-workspace. Only the selected root can be accessed by filesystem MCP tools. Avoid selecting your entire home directory.
+
+**No sudo, git clone, or preinstalled Go required.** Installer downloads checksum-verified release archives if published; otherwise downloads the source archive and compiles it, temporarily downloading a checksum-verified Go toolchain only when necessary. Temporary build artifacts are removed. On Linux with an active user-level systemd service manager, the process starts through systemd; otherwise it starts in the background. In WSL without systemd, the process does not survive WSL shutdown.
+
+### Test locally
+
+~~~bash
 ~/.local/bin/chatgpt-remote doctor
 ~/.local/bin/chatgpt-remote status
-```
+~~~
 
-If you want to run from the source tree without installing:
+The MCP server listens only on http://127.0.0.1:8765/mcp. Passing the local doctor test does not prove that your ChatGPT account can connect remotely.
 
-```bash
-go run ./cmd/remote setup --root "$HOME/projects"
-go run ./cmd/remote serve
-```
+## One-command complete uninstallation
 
-A new setup creates `~/.config/chatgpt-remote/config.json` and a secret bearer token file (`0600`). **Never upload either to GitHub.**
+~~~bash
+bash "$HOME/.local/share/chatgpt-remote/uninstall.sh"
+~~~
 
-### Published release installer (after first release)
+Or, to download the uninstaller:
 
-Once a GitHub release has been published from a version tag, download the repository’s `scripts/bootstrap.sh`, review it, then run `bash scripts/bootstrap.sh --root "$HOME/projects"`. It fetches the latest architecture-matched archive, checks SHA256 against the published checksums, then installs. **No release exists until the repository is created and a tag is published**; do not run the bootstrap command beforehand. Checksums help detect download corruption but are not a substitute for independent signature verification.
+~~~bash
+curl -fsSL https://raw.githubusercontent.com/matrixdurden/chatgpt-remote/main/uninstall.sh | bash
+~~~
+
+This stops the managed process or service, deletes the installed binary, private token, config, PID/logs and associated directories. An installer-created workspace is removed only when empty, so user files and your original projects are **never deleted**. Any external tunnel or ChatGPT plugin connection must be revoked separately. This installer does not change shell startup files and does not install Go system-wide.
+
+For source contributors, use git clone followed by ./scripts/install.sh --root /your/project (requires Go 1.23+ when no precompiled binary is bundled).
 
 ## Connect to ChatGPT
 

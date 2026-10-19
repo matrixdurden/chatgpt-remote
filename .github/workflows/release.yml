@@ -2,6 +2,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [main]
+    paths: ['install.sh']
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -28,8 +31,11 @@ jobs:
           done
           cd out
           sha256sum *.tar.gz > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - name: Publish first installable release (or version tag)
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.2.0' }}
+          target_commitish: ${{ github.sha }}
           files: |
             out/*.tar.gz
             out/SHA256SUMS
