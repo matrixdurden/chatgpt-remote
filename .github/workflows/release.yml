@@ -3,7 +3,11 @@ on:
   push:
     tags: ['v*']
     branches: [main]
-    paths: ['install.sh']
+    paths:
+      - 'install.sh'
+      - 'internal/remote/bridge.go'
+      - 'internal/remote/bridge_test.go'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 permissions:
   contents: write
@@ -31,11 +35,11 @@ jobs:
           done
           cd out
           sha256sum *.tar.gz > SHA256SUMS
-      - name: Publish v0.3.0 release
+      - name: Publish v0.3.1 release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.3.0
-          name: ChatGPT Remote v0.3.0
+          tag_name: v0.3.1
+          name: ChatGPT Remote v0.3.1
           make_latest: true
           files: |
             out/*.tar.gz

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func requestBridge(b *Bridge, method, uri, body, contentType, bearer string) *httptest.ResponseRecorder {
@@ -79,6 +80,10 @@ func TestBridgeOAuthEndToEnd(t *testing.T) {
 	if bad.Code != 403 {
 		t.Fatalf("accepted wrong pairing code: %d", bad.Code)
 	}
+	// A browser approval after six minutes must still be accepted.
+	b.mu.Lock()
+	b.Pending[nonce[1]].Created = time.Now().Add(-6 * time.Minute)
+	b.mu.Unlock()
 	grant := requestBridge(b, "POST", "https://example.trycloudflare.com/oauth/authorize", url.Values{"nonce": {nonce[1]}, "code": {"0123456789abcdef12345678"}}.Encode(), "application/x-www-form-urlencoded", "")
 	if grant.Code != 303 {
 		t.Fatalf("consent failed: %d %s", grant.Code, grant.Body.String())
@@ -129,5 +134,22 @@ func TestBridgeRejectsHostMismatch(t *testing.T) {
 	b.ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatalf("unexpected status %d", w.Code)
+	}
+}
+
+func TestBridgeExpiredPairingHasRecoveryInstructions(t *testing.T) {
+	b := NewBridge("http://127.0.0.1:8765/mcp", "local-secret", "0123456789abcdef12345678")
+	b.Activate("https://example.trycloudflare.com")
+	// A stale or invalid request is a recoverable browser error, not raw JSON.
+	for _, nonce := range []string{"unknown", "expired"} {
+		if nonce == "expired" {
+			b.mu.Lock()
+			b.Pending[nonce] = &pendingAuth{Created: time.Now().Add(-31 * time.Minute)}
+			b.mu.Unlock()
+		}
+		res := requestBridge(b, "POST", "https://example.trycloudflare.com/oauth/authorize", url.Values{"nonce": {nonce}, "code": {"0123456789abcdef12345678"}}.Encode(), "application/x-www-form-urlencoded", "")
+		if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "expired_request") || !strings.Contains(res.Body.String(), "Return to ChatGPT") {
+			t.Fatalf("unexpected expired approval result: %d %s", res.Code, res.Body.String())
+		}
 	}
 }

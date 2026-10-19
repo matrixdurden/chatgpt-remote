@@ -46,6 +46,8 @@ type Bridge struct {
 	Client     *http.Client
 	ready      chan struct{}
 }
+const pairingRequestTTL = 30 * time.Minute
+
 type pendingAuth struct {
 	ClientID, Redirect, State, Challenge, Resource, Scope string
 	Created                                               time.Time
@@ -210,7 +212,20 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 		nonce := randomHex(24)
 		b.mu.Lock()
-		b.Pending[nonce] = &pendingAuth{ClientID: clientID, Redirect: red, State: q.Get("state"), Challenge: q.Get("code_challenge"), Resource: resource, Scope: "mcp:tools", Created: time.Now()}
+		// Keep the pending set bounded. OAuth registration can trigger multiple
+		// browser tabs and stale authorizations; expire old sessions on each GET.
+		now := time.Now()
+		for key, pending := range b.Pending {
+			if now.Sub(pending.Created) > pairingRequestTTL {
+				delete(b.Pending, key)
+			}
+		}
+		if len(b.Pending) >= 128 {
+			b.mu.Unlock()
+			oauthError(w, http.StatusTooManyRequests, "slow_down")
+			return
+		}
+		b.Pending[nonce] = &pendingAuth{ClientID: clientID, Redirect: red, State: q.Get("state"), Challenge: q.Get("code_challenge"), Resource: resource, Scope: "mcp:tools", Created: now}
 		b.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
@@ -229,10 +244,12 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	nonce, provided := r.Form.Get("nonce"), r.Form.Get("code")
 	b.mu.Lock()
 	entry, ok := b.Pending[nonce]
-	if !ok || time.Since(entry.Created) > 5*time.Minute {
+	if !ok || time.Since(entry.Created) > pairingRequestTTL {
 		delete(b.Pending, nonce)
 		b.mu.Unlock()
-		oauthError(w, 400, "expired_request")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, expiredPairingPage)
 		return
 	}
 	entry.Attempts++
@@ -260,6 +277,11 @@ func (b *Bridge) authorize(w http.ResponseWriter, r *http.Request) {
 	dest.RawQuery = query.Encode()
 	http.Redirect(w, r, dest.String(), http.StatusSeeOther)
 }
+
+// Browsers previously showed only {"error":"expired_request"}, leaving no
+// indication of how to recover. An OAuth request is never silently recreated:
+// the user must explicitly restart authorization from ChatGPT.
+const expiredPairingPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ChatGPT Remote — Session expired</title><style>body{font:16px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;color:#171717}p{color:#555;line-height:1.5}</style><h2>Pairing session expired</h2><p>The authorization session expired or is no longer available (expired_request). Return to ChatGPT and start the connection approval again to open a fresh pairing page.</p><p>Keep the chatgpt-remote terminal running. If you restarted it, the Cloudflare URL changed and you must update the MCP connection URL in ChatGPT.</p></html>`
 
 var pairingPage = template.Must(template.New("authorize").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ChatGPT Remote — Authorize</title><style>body{font:16px system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;color:#171717}input,button{box-sizing:border-box;width:100%;padding:13px;margin-top:13px;font:inherit;border-radius:8px}input{border:1px solid #aaa}button{border:0;background:#202020;color:white;cursor:pointer}p{color:#555;line-height:1.5}</style><h2>Connect ChatGPT Remote</h2><p>Only continue if you started this connection. Enter the pairing code shown in your Linux terminal to allow ChatGPT to access your permitted project files.</p><form method="post" action="/oauth/authorize"><input type="hidden" name="nonce" value="{{.Nonce}}"><input type="text" name="code" autocomplete="off" spellcheck="false" placeholder="Pairing code" required autofocus><button type="submit">Authorize connection</button></form><p>Do not share this code with others.</p></html>`))
 
